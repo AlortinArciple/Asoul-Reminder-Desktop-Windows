@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import threading
 from datetime import datetime, timedelta, timezone
 from queue import Empty, Queue
@@ -42,6 +43,9 @@ COOKIE_CHECK_INTERVAL = timedelta(minutes=30)
 # 日程「新增/变动」提醒只针对还没结束的日程。站点每周重建日程页时会把几周前的日程
 # 重新放回 initialEvents，若不加这条过滤，这些历史日程会被当成新日程逐条弹窗。
 SCHEDULE_NOTIFY_GRACE = timedelta(minutes=30)
+# 日程检查节拍抖动比例：所有客户端都按固定 30 分钟节拍会集中在同一分钟请求站点，
+# 这里把实际到期时间打散到 ±10%，减轻 asoul.love 的瞬时压力。
+ASOUL_CHECK_JITTER_RATIO = 0.1
 
 
 def now_utc() -> datetime:
@@ -81,6 +85,8 @@ class ReminderService:
         self.pending_commands: set[str] = set()
         self.command_lock = threading.Lock()
         self._owner_thread_id: int | None = None
+        # 日程节拍抖动源；测试可注入固定种子的 Random 以便断言。
+        self._jitter_source = random.Random()
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
@@ -230,6 +236,27 @@ class ReminderService:
             minutes *= min(streak, 4)
         return timedelta(minutes=minutes)
 
+    def asoul_check_delay(self) -> timedelta:
+        """本次要等多久才允许下一次日程检查。
+
+        在基础间隔（含失败退避）上叠加 ±10% 抖动，打散各客户端的固定 30 分钟节拍，
+        减轻 asoul.love 的瞬时压力。抖动值在每次检查结束时抽一次并写进 state，
+        这样每 30 秒一次的 tick 不会反复掷骰子把检查提前。
+        """
+        interval = self.asoul_check_interval()
+        try:
+            offset = float(self.state.data.get("asoul_check_jitter_seconds") or 0.0)
+        except (TypeError, ValueError):
+            offset = 0.0
+        limit = interval.total_seconds() * ASOUL_CHECK_JITTER_RATIO
+        return interval + timedelta(seconds=max(-limit, min(limit, offset)))
+
+    def roll_asoul_check_jitter(self) -> None:
+        """按当前间隔重新抽一次抖动偏移（负数提前、正数延后）。"""
+        limit = self.asoul_check_interval().total_seconds() * ASOUL_CHECK_JITTER_RATIO
+        offset = self._jitter_source.uniform(-limit, limit) if limit > 0 else 0.0
+        self.state.data["asoul_check_jitter_seconds"] = round(offset, 3)
+
     def is_asoul_check_due(self, current: datetime) -> bool:
         last_asoul = parse_time(self.state.data.get("last_asoul_check"))
         if last_asoul is None:
@@ -237,7 +264,7 @@ class ReminderService:
         if last_asoul - current > CLOCK_SKEW_TOLERANCE:
             LOGGER.warning("ASOUL 日程检查时间位于未来，将立即重新检查")
             return True
-        return current - last_asoul >= self.asoul_check_interval()
+        return current - last_asoul >= self.asoul_check_delay()
 
     def check_asoul(self, current: datetime | None = None, force: bool = False) -> bool:
         with self.lock:
@@ -249,6 +276,7 @@ class ReminderService:
                 )
                 return False
             self.state.data["last_asoul_check"] = current.isoformat()
+            self.roll_asoul_check_jitter()
             try:
                 events = self.asoul.fetch_events()
             except Exception as exc:

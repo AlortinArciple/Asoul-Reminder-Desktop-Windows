@@ -135,6 +135,13 @@ class FakeAsoul:
         return self.events
 
 
+class ZeroJitter:
+    """固定返回 0 的抖动源：让「30 分钟/60 分钟」这类精确断言不受随机偏移影响。"""
+
+    def uniform(self, low: float, high: float) -> float:  # noqa: ARG002 - 接口对齐 random.Random
+        return 0.0
+
+
 class FakeNotifier:
     def __init__(self, succeed: bool = True) -> None:
         self.messages: list[tuple[str, str, str]] = []
@@ -161,6 +168,8 @@ class FakeNotifier:
 
 
 class ServiceTests(unittest.TestCase):
+    """时间相关的断言都基于「无抖动」节拍，统一注入固定为 0 的抖动源。"""
+
     def make_service(
         self,
         config: AppConfig,
@@ -171,13 +180,15 @@ class ServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = StateStore(Path(tmp) / "state.json")
             state.data["live_events"] = {event.id: event_to_state(event)}
-            return ReminderService(
+            service = ReminderService(
                 config,
                 state,
                 asoul or object(),
                 bilibili or object(),
                 FakeNotifier(),
             )
+            service._jitter_source = ZeroJitter()
+            return service
 
     def test_suppresses_same_member_dynamic_near_live_start(self):
         member = make_member("diana")
@@ -913,6 +924,82 @@ class ScheduleNoticeWindowTests(unittest.TestCase):
         service.notify_schedule_changes({stale.id: stale}, {})
 
         self.assertEqual(service.notifier.messages, [])
+
+
+class AsoulCheckJitterTests(unittest.TestCase):
+    """日程检查节拍带 ±10% 抖动，避免所有客户端在同一分钟打 asoul.love。"""
+
+    def make_service(self) -> ReminderService:
+        member = make_member("diana")
+        state = StateStore(Path(self.tmp.name) / "state.json")
+        service = ReminderService(
+            make_config(member),
+            state,
+            object(),
+            object(),
+            FakeNotifier(),
+        )
+        return service
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_jitter_offset_stays_within_ten_percent(self):
+        service = self.make_service()
+        current = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+
+        with self.assertLogs("asoul_reminder.service", level="ERROR"):
+            service.check_asoul(current=current)
+
+        offset = float(service.state.data["asoul_check_jitter_seconds"])
+        self.assertLessEqual(abs(offset), 30 * 60 * 0.1)
+        self.assertGreaterEqual(service.asoul_check_delay(), timedelta(minutes=27))
+
+    def test_negative_jitter_shortens_but_never_below_ninety_percent(self):
+        service = self.make_service()
+        service.state.data["asoul_check_jitter_seconds"] = -999  # 超出上限时被夹紧
+        delay = service.asoul_check_delay()
+
+        self.assertEqual(delay, timedelta(minutes=27))
+
+    def test_positive_jitter_delays_next_check(self):
+        service = self.make_service()
+        current = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+        service.asoul = FakeAsoul(events=[], error=RuntimeError("forbidden"))
+        with self.assertLogs("asoul_reminder.service", level="ERROR"):
+            service.check_asoul(current=current)
+
+        service.state.data["asoul_check_jitter_seconds"] = 180.0  # +3 分钟
+        self.assertFalse(service.is_asoul_check_due(current + timedelta(minutes=32)))
+        self.assertTrue(service.is_asoul_check_due(current + timedelta(minutes=33)))
+
+    def test_jitter_is_rerolled_on_each_check(self):
+        service = self.make_service()
+        service._jitter_source = RecordingJitter([-120.0, 60.0])
+        current = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+        service.asoul = FakeAsoul(events=[], error=RuntimeError("forbidden"))
+
+        with self.assertLogs("asoul_reminder.service", level="ERROR"):
+            service.check_asoul(current=current)
+        first = service.state.data["asoul_check_jitter_seconds"]
+        with self.assertLogs("asoul_reminder.service", level="ERROR"):
+            service.check_asoul(current=current + timedelta(minutes=40))
+        second = service.state.data["asoul_check_jitter_seconds"]
+
+        self.assertEqual(first, -120.0)
+        self.assertEqual(second, 60.0)
+
+
+class RecordingJitter:
+    """按顺序返回预设偏移的抖动源，用于断言「每次检查都重新抽签」。"""
+
+    def __init__(self, values: list[float]) -> None:
+        self.values = list(values)
+
+    def uniform(self, low: float, high: float) -> float:
+        value = self.values.pop(0)
+        return max(low, min(high, value))
 
 
 if __name__ == "__main__":
