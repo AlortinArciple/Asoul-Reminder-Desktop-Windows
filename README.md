@@ -22,6 +22,17 @@
 
 > 本仓库只包含 Windows 桌面端；Android 端不在本仓库内。
 
+## 下载
+
+已编译的 Windows 安装包与便携包在 [Releases](https://github.com/AlortinArciple/Asoul-Reminder-Desktop-Windows/releases) 页面：
+
+```text
+AsoulReminder-Setup.exe
+AsoulReminder-portable.zip
+```
+
+两者都不包含 `config.json` 或 B 站 Cookie。
+
 ## 安装与运行
 
 需要先安装 Python 3.11 或更高版本。
