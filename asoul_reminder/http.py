@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -13,6 +15,12 @@ DEFAULT_HEADERS = {
     ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
+
+DOWNLOAD_CHUNK_SIZE = 256 * 1024
+
+
+class DownloadCancelled(RuntimeError):
+    """用户中止了下载。"""
 
 
 @dataclass
@@ -93,3 +101,52 @@ class HttpClient:
         if response.status_code >= 400 and not isinstance(payload, dict):
             response.raise_for_status()
         return payload, response
+
+    def download_file(
+        self,
+        url: str,
+        target: Path,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+        cancel: Callable[[], bool] | None = None,
+        headers: dict[str, str] | None = None,
+        bypass_proxy: bool = False,
+    ) -> Path:
+        """流式下载到 target，先写 .part 再原子替换，避免留下半个文件。"""
+        merged = {**DEFAULT_HEADERS, **(headers or {})}
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(target.name + ".part")
+
+        session = requests.Session()
+        if bypass_proxy:
+            session.trust_env = False
+        proxies = {"http": None, "https": None} if bypass_proxy else None
+        try:
+            response = session.get(
+                url,
+                headers=merged,
+                timeout=self.timeout_seconds,
+                stream=True,
+                proxies=proxies,
+            )
+            response.raise_for_status()
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            with partial.open("wb") as handle:
+                for chunk in response.iter_content(DOWNLOAD_CHUNK_SIZE):
+                    if cancel is not None and cancel():
+                        raise DownloadCancelled("下载已取消")
+                    if not chunk:
+                        continue
+                    handle.write(chunk)
+                    done += len(chunk)
+                    if progress is not None:
+                        progress(done, total)
+            partial.replace(target)
+            return target
+        except Exception:
+            partial.unlink(missing_ok=True)
+            raise
+        finally:
+            session.close()

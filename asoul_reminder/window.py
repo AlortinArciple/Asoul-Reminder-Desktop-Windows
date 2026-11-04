@@ -62,6 +62,18 @@ from .startup import (
     set_registered_startup_command,
     startup_enabled,
 )
+from .updater import (
+    SETUP_ASSET_NAME,
+    UPDATE_CHECK_INTERVAL_HOURS,
+    DownloadCancelled,
+    ReleaseInfo,
+    UpdateClient,
+    UpdateError,
+    UpdateProgress,
+    download_release,
+    is_newer,
+)
+from .version import app_version
 
 
 BG = "#ECEBE7"
@@ -416,6 +428,11 @@ class DashboardWindow(QtWidgets.QMainWindow if QtWidgets else object):
         self.fast_refresh_until: datetime | None = None
         self.login_dialog: QrLoginDialog | None = None
         self.cookie_prompt_marker: str | None = None
+        self.update_dialog: UpdateDialog | None = None
+        self.update_checked_at: datetime | None = None
+        self.update_busy = False
+        self._update_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._update_manual = False
 
         self.setWindowTitle("Asoul Reminder")
         self.resize(1600, 920)
@@ -447,6 +464,10 @@ class DashboardWindow(QtWidgets.QMainWindow if QtWidgets else object):
         self.fast_refresh_timer.timeout.connect(self._poll_fast_refresh)
         self.fast_refresh_timer.setInterval(1000)
 
+        self.update_timer = QtCore.QTimer(self)
+        self.update_timer.timeout.connect(self._drain_update_queue)
+        self.update_timer.start(200)
+
         self.refresh(force=True)
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802 - Qt method name.
@@ -470,6 +491,106 @@ class DashboardWindow(QtWidgets.QMainWindow if QtWidgets else object):
         self.raise_()
         self.activateWindow()
         QtCore.QTimer.singleShot(1500, self._maybe_prompt_cookie_login)
+        QtCore.QTimer.singleShot(4000, self.check_updates_on_startup)
+
+    def check_updates_on_startup(self) -> None:
+        """启动后静默检查一次更新；同一次运行内只检查一次。"""
+        if self.update_checked_at is not None or self.update_busy:
+            return
+        self.check_for_updates(manual=False)
+
+    def check_for_updates(self, manual: bool = True) -> None:
+        """查询 GitHub 最新 Release。manual=False 时无新版不打扰用户。"""
+        if self.update_busy:
+            return
+        now = datetime.now(timezone.utc)
+        if not manual and self.update_checked_at is not None:
+            if now - self.update_checked_at < timedelta(hours=UPDATE_CHECK_INTERVAL_HOURS):
+                return
+        self.update_checked_at = now
+        self.update_busy = True
+        self._update_manual = manual
+        if manual:
+            self.status_text = "正在检查更新..."
+            self._set_activity_status()
+        self.refresh_installer_status()
+
+        http = getattr(self.service.bilibili, "http", None) or HttpClient()
+        client = UpdateClient(http)
+
+        def worker() -> None:
+            try:
+                info = client.latest(SETUP_ASSET_NAME)
+            except UpdateError as exc:
+                self._update_queue.put(("error", str(exc)))
+                return
+            except Exception as exc:  # 兜底，绝不让后台线程崩掉窗口
+                self._update_queue.put(("error", f"检查更新失败：{exc}"))
+                return
+            self._update_queue.put(("info", info))
+
+        threading.Thread(target=worker, name="update-check", daemon=True).start()
+
+    def _drain_update_queue(self) -> None:
+        while True:
+            try:
+                kind, payload = self._update_queue.get_nowait()
+            except queue.Empty:
+                return
+            self._handle_update_message(kind, payload)
+
+    def _handle_update_message(self, kind: str, payload: Any) -> None:
+        self.update_busy = False
+        self.refresh_installer_status()
+        current = app_version()
+        if kind == "error":
+            if payload and self._update_manual:
+                QtWidgets.QMessageBox.warning(self, "检查更新", str(payload))
+            self.status_text = "检查更新失败，稍后可重试"
+            self._set_activity_status()
+            return
+        info = payload
+        if not isinstance(info, ReleaseInfo):
+            return
+        if not is_newer(info.tag, current):
+            self.status_text = f"已是最新版本 v{current}"
+            self._set_activity_status()
+            if self._update_manual:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "检查更新",
+                    f"当前已是最新版本 v{current}。",
+                )
+            return
+        self.status_text = f"发现新版本 {info.tag}"
+        self._set_activity_status()
+        self.open_update_dialog(info)
+
+    def open_update_dialog(self, info: ReleaseInfo) -> None:
+        if self.update_dialog is not None and self.update_dialog.isVisible():
+            self.update_dialog.raise_()
+            self.update_dialog.activateWindow()
+            return
+        self.update_dialog = UpdateDialog(self, info)
+        self.update_dialog.show()
+
+    def install_update(self, path: str) -> None:
+        """关闭程序并运行下载好的安装包。"""
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))
+        QtCore.QTimer.singleShot(600, self._quit_for_update)
+
+    def _quit_for_update(self) -> None:
+        self.request_exit()
+        service = self.service
+        try:
+            service.stop()
+        except Exception:
+            pass
+        QtWidgets.QApplication.quit()
+
+    def refresh_installer_status(self) -> None:
+        if self.settings_dialog is not None and self.settings_dialog.isVisible():
+            self.settings_dialog._update_update_status_label()
 
     def request_exit(self) -> None:
         self.allow_close = True
@@ -1676,6 +1797,155 @@ class QrLoginDialog(QtWidgets.QDialog if QtWidgets else object):
         super().closeEvent(event)
 
 
+class UpdateDialog(QtWidgets.QDialog if QtWidgets else object):
+    """新版本对话框：后台下载安装包，完成后退出并启动安装程序。"""
+
+    def __init__(self, dashboard: DashboardWindow, info: ReleaseInfo) -> None:
+        super().__init__(dashboard)
+        self.dashboard = dashboard
+        self.info = info
+        self.http = getattr(dashboard.service.bilibili, "http", None) or HttpClient()
+        self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self.cancel_event = threading.Event()
+        self.worker: threading.Thread | None = None
+        self.downloaded_path = ""
+        self.finished_update = False
+
+        self.setWindowTitle("发现新版本")
+        self.setModal(False)
+        self.resize(560, 460)
+        self._build()
+
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self._drain)
+        self.timer.start(150)
+        self._start_download()
+
+    def _build(self) -> None:
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QtWidgets.QLabel(f"发现新版本 {self.info.tag}")
+        title.setStyleSheet("font-size:20px; font-weight:700;")
+        layout.addWidget(title)
+
+        detail = QtWidgets.QLabel(
+            f"当前版本 v{app_version()} → 最新版本 {self.info.tag}\n"
+            f"安装包 {self.info.asset_name}（{self.info.size_text}）"
+        )
+        detail.setWordWrap(True)
+        layout.addWidget(detail)
+
+        notes = QtWidgets.QPlainTextEdit(self.info.notes.strip() or "（该版本没有提供更新说明）")
+        notes.setReadOnly(True)
+        notes.setMinimumHeight(180)
+        layout.addWidget(notes, 1)
+
+        self.status_label = QtWidgets.QLabel("正在下载安装包...")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        self.later_button = QtWidgets.QPushButton("稍后")
+        self.later_button.setFixedWidth(96)
+        self.later_button.clicked.connect(self.reject)
+        buttons.addWidget(self.later_button)
+        buttons.addStretch(1)
+        self.install_button = QtWidgets.QPushButton("立即安装")
+        self.install_button.setObjectName("primaryButton")
+        self.install_button.setFixedWidth(120)
+        self.install_button.setEnabled(False)
+        self.install_button.clicked.connect(self._install)
+        buttons.addWidget(self.install_button)
+        layout.addLayout(buttons)
+
+    def _start_download(self) -> None:
+        self.worker = threading.Thread(target=self._run, name="update-download", daemon=True)
+        self.worker.start()
+
+    def _run(self) -> None:
+        from .paths import app_data_dir
+
+        target_dir = app_data_dir() / "updates"
+        try:
+            path = download_release(
+                self.http,
+                self.info,
+                target_dir,
+                progress=lambda item: self.messages.put(("progress", item)),
+                cancel=self.cancel_event.is_set,
+            )
+        except DownloadCancelled:
+            self.messages.put(("cancelled", None))
+            return
+        except UpdateError as exc:
+            self.messages.put(("error", str(exc)))
+            return
+        except Exception as exc:  # 兜底
+            self.messages.put(("error", f"下载失败：{exc}"))
+            return
+        self.messages.put(("done", str(path)))
+
+    def _drain(self) -> None:
+        while True:
+            try:
+                kind, payload = self.messages.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "progress":
+                item = payload
+                if isinstance(item, UpdateProgress):
+                    if item.total > 0:
+                        self.progress.setValue(item.percent)
+                        self.status_label.setText(
+                            f"正在下载安装包... {item.downloaded / (1024 * 1024):.1f} / "
+                            f"{item.total / (1024 * 1024):.1f} MB"
+                        )
+                    else:
+                        self.status_label.setText(
+                            f"正在下载安装包... {item.downloaded / (1024 * 1024):.1f} MB"
+                        )
+            elif kind == "done":
+                self.timer.stop()
+                self.downloaded_path = str(payload)
+                self.progress.setValue(100)
+                self.status_label.setText(f"下载完成：{self.downloaded_path}")
+                self.install_button.setEnabled(True)
+                self.later_button.setText("取消")
+                self._install()
+            elif kind == "error":
+                self.timer.stop()
+                self.status_label.setText(str(payload))
+                self.install_button.setEnabled(False)
+                self.later_button.setText("关闭")
+                QtWidgets.QMessageBox.warning(self, "下载失败", str(payload))
+            elif kind == "cancelled":
+                self.timer.stop()
+                self.status_label.setText("下载已取消")
+                self.later_button.setText("关闭")
+
+    def _install(self) -> None:
+        if not self.downloaded_path:
+            return
+        self.finished_update = True
+        self.timer.stop()
+        self.dashboard.install_update(self.downloaded_path)
+        self.accept()
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802 - Qt method name.
+        if not self.finished_update:
+            self.cancel_event.set()
+        self.timer.stop()
+        super().closeEvent(event)
+
+
 class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
     def __init__(self, dashboard: DashboardWindow) -> None:
         super().__init__(dashboard)
@@ -1807,6 +2077,19 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
         cookie_row.addStretch(1)
         form.addRow("B 站 Cookie", cookie_row)
         self._update_cookie_status_label()
+
+        update_row = QtWidgets.QHBoxLayout()
+        update_row.setContentsMargins(0, 0, 0, 0)
+        update_row.setSpacing(10)
+        self.update_status_label = self.dashboard._muted_label("")
+        update_row.addWidget(self.update_status_label)
+        self.check_update_button = QtWidgets.QPushButton("检查更新")
+        self.check_update_button.setFixedWidth(104)
+        self.check_update_button.clicked.connect(self._check_updates)
+        update_row.addWidget(self.check_update_button)
+        update_row.addStretch(1)
+        form.addRow("程序版本", update_row)
+        self._update_update_status_label()
         button = QtWidgets.QPushButton("保存全局配置")
         button.setObjectName("primaryButton")
         button.clicked.connect(self.save_global_settings)
@@ -1825,6 +2108,19 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
         else:
             text = "未配置"
         label.setText(text)
+
+    def _check_updates(self) -> None:
+        self.dashboard.check_for_updates(manual=True)
+        self._update_update_status_label()
+
+    def _update_update_status_label(self) -> None:
+        label = getattr(self, "update_status_label", None)
+        if label is None:
+            return
+        if self.dashboard.update_busy:
+            label.setText("正在检查...")
+        else:
+            label.setText(f"当前 v{app_version()}")
 
     def _member_settings_card(self, member: MemberConfig) -> Any:
         card = SoftCard(surface=SUBTLE, radius=20, padding=16)

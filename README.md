@@ -16,6 +16,7 @@
 - **提示音**：直播提醒可为每个成员单独开关、单独指定 `.wav`；检测到全屏游戏/全屏应用等会抑制通知的状态时，自动改用 `winsound` 播放铃声（默认 `Ring01.wav`，可配置循环秒数）。
 - **窗口**：桌面窗口 + 系统托盘，关闭窗口只隐藏到托盘；窗口与托盘单实例运行。
 - **登录**：设置页「B 站 Cookie → 扫码登录」，用手机 B 站客户端扫码即可写入登录凭证，无需手动复制 Cookie。
+- **更新**：启动后静默检查 GitHub Releases（24 小时内不重复），设置页也可手动检查；发现新版本直接下载安装包并自动重启安装，不跳转网页。
 
 ## 下载
 
@@ -170,6 +171,17 @@ code=-352, message=风控校验失败
 **程序每 30 分钟用 `x/web-interface/nav` 校验一次登录状态**（「立即检查」也会强制校验）。只有返回 `code=-101`（或动态接口返回 -101）才判定失效：标记 `bilibili_cookie_expired`、跳过动态检查并自动弹出扫码窗口；网络异常只记为「未知」，不会误判。同一份失效记录只自动弹一次，重新登录成功后清空标记。
 
 Cookie 等同登录凭证：不要发给别人，不要截图公开，也不要把带 Cookie 的 `config.json` 打进安装包或提交到仓库。
+
+## 检查更新
+
+程序启动 4 秒后静默检查一次 `https://api.github.com/repos/AlortinArciple/Asoul-Reminder-Desktop-Windows/releases/latest`，24 小时内不会重复请求；设置页「程序版本」一行也有「检查更新」按钮。
+
+- 只有远端版本严格高于本地 `asoul_reminder/version.py` 的 `APP_VERSION` 才会提示；版本号解析不出来或网络失败时不会误报有新版本。
+- 点「立即安装」后直接下载 `AsoulReminder-Setup.exe`（不打开浏览器），显示进度与总大小。
+- 下载到 `%APPDATA%\AsoulReminder\updates\`，完成后自动结束监控进程并启动安装程序；安装器会重新拉起新版本。
+- 下载中的文件以 `.part` 结尾，取消或出错会删除，不会留下损坏的安装包。
+
+发布新版本时，`asoul_reminder/version.py` 的 `APP_VERSION` 必须与 Release tag（去掉 `v`）一致，否则客户端收不到更新提示。
 
 ## 成员头像
 
