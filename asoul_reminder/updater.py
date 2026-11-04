@@ -101,6 +101,10 @@ def parse_release(payload: dict, asset_name: str = SETUP_ASSET_NAME) -> ReleaseI
         raise UpdateError("更新接口返回了意外内容")
     tag = str(payload.get("tag_name") or "").strip()
     if not tag:
+        # GitHub 出错时返回 {"message": "..."}，例如公开接口按 IP 限流。
+        hint = str(payload.get("message") or "").strip()
+        if hint:
+            raise UpdateError(f"GitHub 返回错误：{hint}")
         raise UpdateError("更新接口没有返回版本号")
 
     assets = payload.get("assets") or []

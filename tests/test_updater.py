@@ -79,6 +79,13 @@ class ParseReleaseTests(unittest.TestCase):
         with self.assertRaises(UpdateError):
             parse_release({"assets": []})
 
+    def test_error_message_is_surfaced(self):
+        # GitHub 按 IP 限流时返回 {"message": "API rate limit exceeded ..."}，
+        # 不能只说「没有返回版本号」，否则用户不知道是限流。
+        with self.assertRaises(UpdateError) as ctx:
+            parse_release({"message": "API rate limit exceeded for 1.2.3.4."})
+        self.assertIn("API rate limit exceeded", str(ctx.exception))
+
     def test_non_dict_payload_raises(self):
         with self.assertRaises(UpdateError):
             parse_release([])  # type: ignore[arg-type]
