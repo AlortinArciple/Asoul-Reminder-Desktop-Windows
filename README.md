@@ -1,3 +1,5 @@
+> Bilibili屿汐烛华 vibecoding产物，日程检测基于asoul.love网站礼貌化爬取，私人使用，莫要给网站加压力，公开仓库用于自动更新。
+
 # Asoul Reminder（Windows 桌面端）
 
 本地运行的 ASOUL 日程、B 站动态与直播间状态提醒程序：常驻系统托盘，按 ASOUL 日程在开播窗口内检测直播间，读取成员动态，用 Windows 通知提醒。
