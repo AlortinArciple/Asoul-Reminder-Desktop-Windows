@@ -74,6 +74,34 @@ class HttpClient:
         response.raise_for_status()
         return response.content
 
+    def content_length(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        *,
+        bypass_proxy: bool = False,
+    ) -> int:
+        """用 HEAD 取文件大小；取不到时返回 0，调用方不应因此中断流程。"""
+        merged = {**DEFAULT_HEADERS, **(headers or {})}
+        session = requests.Session()
+        if bypass_proxy:
+            session.trust_env = False
+        proxies = {"http": None, "https": None} if bypass_proxy else None
+        try:
+            response = session.head(
+                url,
+                headers=merged,
+                timeout=self.timeout_seconds,
+                allow_redirects=True,
+                proxies=proxies,
+            )
+            response.raise_for_status()
+            return int(response.headers.get("Content-Length") or 0)
+        except Exception:
+            return 0
+        finally:
+            session.close()
+
     def get_json(
         self,
         url: str,

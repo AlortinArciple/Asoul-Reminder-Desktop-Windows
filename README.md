@@ -176,8 +176,9 @@ Cookie 等同登录凭证：不要发给别人，不要截图公开，也不要�
 
 ## 检查更新
 
-程序启动 4 秒后静默检查一次 `https://api.github.com/repos/AlortinArciple/Asoul-Reminder-Desktop-Windows/releases/latest`，24 小时内不会重复请求；设置页「程序版本」一行也有「检查更新」按钮。
+程序启动 4 秒后静默检查一次最新版本，24 小时内不会重复请求；设置页「程序版本」一行也有「检查更新」按钮。
 
+- 优先读 `https://github.com/AlortinArciple/Asoul-Reminder-Desktop-Windows/releases.atom`，读不到才退回 `api.github.com/repos/.../releases/latest`。`api.github.com` 按出口 IP 限流 60 次/小时，共用代理时经常被他人用光；atom 源与安装包下载都不占用这份额度。
 - 只有远端版本严格高于本地 `asoul_reminder/version.py` 的 `APP_VERSION` 才会提示；版本号解析不出来或网络失败时不会误报有新版本。
 - 点「立即安装」后直接下载 `AsoulReminder-Setup.exe`（不打开浏览器），显示进度与总大小。
 - 下载到 `%APPDATA%\AsoulReminder\updates\`，完成后自动结束监控进程并启动安装程序；安装器会重新拉起新版本。

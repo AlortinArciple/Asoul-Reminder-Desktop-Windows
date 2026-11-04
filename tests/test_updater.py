@@ -13,9 +13,35 @@ from asoul_reminder.updater import (
     UpdateError,
     download_release,
     is_newer,
+    parse_feed,
     parse_release,
     parse_version,
 )
+
+
+FEED_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en-US">
+  <title>Release notes from Asoul-Reminder-Desktop-Windows</title>
+  <entry>
+    <id>tag:github.com,2008:Repository/1436893255/{tag}</id>
+    <updated>2026-11-04T14:47:05Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/x/y/releases/tag/{tag}"/>
+    <title>Asoul Reminder for Windows {tag}</title>
+    <content type="html">&lt;h1&gt;{tag}&lt;/h1&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;应用内检查更新&lt;/strong&gt;：启动后静默检查&lt;/li&gt;
+&lt;li&gt;下载中的半成品以 &lt;code&gt;.part&lt;/code&gt; 结尾&lt;/li&gt;
+&lt;/ul&gt;</content>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1436893255/v0.9.0</id>
+    <updated>2026-10-01T00:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/x/y/releases/tag/v0.9.0"/>
+    <title>Asoul Reminder for Windows v0.9.0</title>
+    <content type="html">&lt;p&gt;old&lt;/p&gt;</content>
+  </entry>
+</feed>
+"""
 
 
 def release_payload(*, tag="v1.2.0", assets=None, body="更新说明", html_url="https://example/rel"):
@@ -96,11 +122,18 @@ class ParseReleaseTests(unittest.TestCase):
 
 
 class FakeHttp:
-    def __init__(self, payload=None, error: Exception | None = None, data: bytes = b"binary"):
+    def __init__(self, payload=None, error: Exception | None = None, data: bytes = b"binary",
+                 feed: str | None = None, feed_error: Exception | None = None,
+                 size: int = 0):
         self.payload = payload
         self.error = error
         self.data = data
+        self.feed = feed
+        self.feed_error = feed_error
+        self.size = size
         self.calls: list[str] = []
+        self.text_calls: list[str] = []
+        self.head_calls: list[str] = []
         self.download_calls: list[str] = []
 
     def get_json(self, url, headers=None, *, bypass_proxy=False):
@@ -108,6 +141,18 @@ class FakeHttp:
         if self.error is not None:
             raise self.error
         return self.payload or {}
+
+    def get_text(self, url, headers=None, *, bypass_proxy=False):
+        self.text_calls.append(url)
+        if self.feed_error is not None:
+            raise self.feed_error
+        if self.feed is None:
+            raise RuntimeError("no feed configured")
+        return self.feed
+
+    def content_length(self, url, headers=None, *, bypass_proxy=False):
+        self.head_calls.append(url)
+        return self.size
 
     def download_file(self, url, target, *, progress=None, cancel=None, headers=None, bypass_proxy=False):
         self.download_calls.append(url)
@@ -117,6 +162,54 @@ class FakeHttp:
         if progress is not None:
             progress(len(self.data), len(self.data))
         return target
+
+
+class FeedTests(unittest.TestCase):
+    def test_parse_feed_reads_first_entry(self):
+        info = parse_feed(FEED_TEMPLATE.format(tag="v1.2.0"))
+        self.assertEqual(info.tag, "v1.2.0")
+        self.assertEqual(info.name, "Asoul Reminder for Windows v1.2.0")
+        self.assertEqual(info.html_url, "https://github.com/x/y/releases/tag/v1.2.0")
+        self.assertEqual(info.asset_name, SETUP_ASSET_NAME)
+        self.assertTrue(info.asset_url.endswith("/releases/download/v1.2.0/" + SETUP_ASSET_NAME))
+
+    def test_parse_feed_turns_html_into_plain_text(self):
+        notes = parse_feed(FEED_TEMPLATE.format(tag="v1.2.0")).notes
+        self.assertNotIn("<", notes)
+        self.assertIn("应用内检查更新", notes)
+        self.assertIn("- 下载中的半成品", notes)
+
+    def test_parse_feed_rejects_garbage(self):
+        with self.assertRaises(UpdateError):
+            parse_feed("")
+        with self.assertRaises(UpdateError):
+            parse_feed("not xml at all")
+
+    def test_parse_feed_without_entries_raises(self):
+        with self.assertRaises(UpdateError):
+            parse_feed('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>')
+
+    def test_latest_prefers_feed_and_skips_api(self):
+        # 有 feed 就不该再打 api.github.com，避免被共享出口 IP 的额度拖累。
+        fake = FakeHttp(payload=release_payload(), feed=FEED_TEMPLATE.format(tag="v1.3.0"), size=4242)
+        info = UpdateClient(fake).latest()
+        self.assertEqual(info.tag, "v1.3.0")
+        self.assertEqual(info.asset_size, 4242)
+        self.assertEqual(info.size_text, "0.0 MB")
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(fake.head_calls, [info.asset_url])
+
+    def test_latest_falls_back_to_api_when_feed_fails(self):
+        fake = FakeHttp(payload=release_payload(), feed_error=RuntimeError("blocked"))
+        info = UpdateClient(fake).latest()
+        self.assertEqual(info.tag, "v1.2.0")
+        self.assertEqual(fake.calls, ["https://api.github.com/repos/AlortinArciple/Asoul-Reminder-Desktop-Windows/releases/latest"])
+
+    def test_latest_reports_last_error_when_both_fail(self):
+        fake = FakeHttp(error=RuntimeError("rate limited"), feed_error=RuntimeError("blocked"))
+        with self.assertRaises(UpdateError) as ctx:
+            UpdateClient(fake).latest()
+        self.assertIn("rate limited", str(ctx.exception))
 
 
 class UpdateClientTests(unittest.TestCase):
