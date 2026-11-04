@@ -14,6 +14,18 @@ MEMBER_ID_ALIASES = {
     "sinno": "gladys",
 }
 ASOUL_MIN_CHECK_INTERVAL_MINUTES = 30
+# 后加入的成员：老配置里这两项是空的，动态开关会静默失效。
+# 读取配置时只在字段为空的情况下补齐，不覆盖用户自己填写的值。
+DEFAULT_MEMBER_IDENTITIES: dict[str, tuple[str, str]] = {
+    "fiona": (
+        "3537115310721181",
+        "https://space.bilibili.com/3537115310721181/dynamic",
+    ),
+    "gladys": (
+        "3537115310721781",
+        "https://space.bilibili.com/3537115310721781/dynamic",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -80,11 +92,43 @@ def normalize_member_item(item: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def fill_default_identities(raw: dict[str, Any]) -> bool:
+    """给已知成员补上空的 uid / dynamic_url，返回是否发生了改动。
+
+    只填空字符串字段，用户自己填过的值一律保留。
+    """
+    members = raw.get("members")
+    if not isinstance(members, list):
+        return False
+    changed = False
+    for item in members:
+        if not isinstance(item, dict):
+            continue
+        member_id = canonical_member_id(str(item.get("id") or ""))
+        identity = DEFAULT_MEMBER_IDENTITIES.get(member_id)
+        if identity is None:
+            continue
+        uid, dynamic_url = identity
+        if not str(item.get("uid") or "").strip():
+            item["uid"] = uid
+            changed = True
+        if not str(item.get("dynamic_url") or "").strip():
+            item["dynamic_url"] = dynamic_url
+            changed = True
+    return changed
+
+
 def read_config_data(path: Path | None = None) -> tuple[Path, dict[str, Any]]:
     config_path = ensure_config(path)
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
     if not isinstance(raw, dict):
         raise ValueError("config.json 顶层必须是对象")
+    if fill_default_identities(raw):
+        try:
+            write_config_data(raw, config_path)
+        except (OSError, ValueError):
+            # 配置只读或暂时不可写时仍按补全后的内容运行，不阻断启动。
+            pass
     return config_path, raw
 
 
