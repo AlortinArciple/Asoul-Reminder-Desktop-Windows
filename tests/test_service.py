@@ -301,6 +301,119 @@ class ServiceTests(unittest.TestCase):
             )
         )
 
+    def test_early_window_candidate_enters_sixty_minutes_before(self):
+        member = make_member("diana")
+        start = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+        event = make_event(member, start)
+        service = self.make_service(make_config(member), event)
+
+        early = service.events_requiring_live_status(start - timedelta(minutes=35))
+        too_early = service.events_requiring_live_status(start - timedelta(minutes=61))
+
+        self.assertEqual([candidate.id for candidate in early], [event.id])
+        self.assertEqual(too_early, [])
+
+    def test_early_window_uses_ninety_second_interval(self):
+        member = make_member("diana")
+        start = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+        service = self.make_service(make_config(member), make_event(member, start))
+        current = start - timedelta(minutes=35)
+        candidates = service.events_requiring_live_status(current)
+
+        interval = service.live_status_interval_for_member(member, candidates, current)
+
+        self.assertEqual(interval, timedelta(seconds=90))
+
+    def test_early_window_switches_to_half_minute_at_ten_minutes(self):
+        member = make_member("diana")
+        start = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+        service = self.make_service(
+            make_config(member, live_open_interval_seconds=30),
+            make_event(member, start),
+        )
+
+        early = start - timedelta(minutes=35)
+        opened = start - timedelta(minutes=10)
+        early_candidates = service.events_requiring_live_status(early)
+        open_candidates = service.events_requiring_live_status(opened)
+
+        self.assertEqual(
+            service.live_status_interval_for_member(member, early_candidates, early),
+            timedelta(seconds=90),
+        )
+        self.assertEqual(
+            service.live_status_interval_for_member(member, open_candidates, opened),
+            timedelta(seconds=30),
+        )
+
+    def test_live_started_during_early_window_notifies_and_marks_open(self):
+        member = make_member("diana")
+        start = datetime.now(timezone.utc) + timedelta(minutes=40)
+        event = make_event(member, start)
+        status = LiveRoomStatus(
+            member_id=member.id,
+            member_name=member.name,
+            room_id="123",
+            live_status=1,
+            title="提前开播",
+            live_time="2026-06-10 11:20:00",
+        )
+        service = self.make_service(make_config(member), event, FakeBilibili(status))
+
+        service.check_member_live_status(member, [event])
+
+        self.assertIn(event.id, service.state.data["live_event_open_times"])
+        self.assertIn(event.id, service.state.data["notified_live_started"])
+        self.assertEqual(service.notifier.messages[0][0], "直播已开始")
+
+    def test_early_detection_does_not_notify_twice_in_open_window(self):
+        member = make_member("diana")
+        start = datetime.now(timezone.utc) + timedelta(minutes=40)
+        event = make_event(member, start)
+        status = LiveRoomStatus(
+            member_id=member.id,
+            member_name=member.name,
+            room_id="123",
+            live_status=1,
+            title="提前开播",
+            live_time="2026-06-10 11:20:00",
+        )
+        service = self.make_service(make_config(member), event, FakeBilibili(status))
+
+        service.check_member_live_status(member, [event])
+        notified_once = dict(service.state.data["notified_live_started"])
+        # 再检查一次（模拟进入 10 分钟开播窗口后继续轮询）：同一场不应重复通知。
+        service.check_member_live_status(member, [event])
+
+        self.assertEqual(len(service.notifier.messages), 1)
+        self.assertEqual(service.state.data["notified_live_started"], notified_once)
+
+    def test_early_window_picks_nearest_event_when_two_schedules_within_an_hour(self):
+        member = make_member("diana")
+        now = datetime.now(timezone.utc)
+        near = make_event(member, now + timedelta(minutes=35))
+        far = LiveEvent(
+            **{**make_event(member, now + timedelta(minutes=55)).__dict__, "id": "event-2"}
+        )
+        status = LiveRoomStatus(
+            member_id=member.id,
+            member_name=member.name,
+            room_id="123",
+            live_status=1,
+            title="提前开播",
+            live_time="2026-06-10 11:20:00",
+        )
+        service = self.make_service(make_config(member), near, FakeBilibili(status))
+        service.state.data["live_events"] = {
+            near.id: event_to_state(near),
+            far.id: event_to_state(far),
+        }
+
+        service.check_member_live_status(member, [near, far])
+
+        self.assertIn(near.id, service.state.data["live_event_open_times"])
+        self.assertNotIn(far.id, service.state.data["live_event_open_times"])
+
     def test_records_live_event_open_time(self):
         member = make_member("diana")
         start = datetime.now(timezone.utc) - timedelta(minutes=1)

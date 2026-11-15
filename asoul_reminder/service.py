@@ -37,6 +37,10 @@ from .version import version_text
 LOGGER = logging.getLogger(__name__)
 LIVE_STATUS_OPEN_WINDOW_BEFORE = timedelta(minutes=10)
 LIVE_STATUS_OPEN_WINDOW_AFTER = timedelta(minutes=2)
+# 提前检测窗口：开播前 60 分钟起就低频盯直播间，提前发现「早开播」。
+# 这段窗口左闭右开 [start-60min, start-10min)，10 分钟整点起交给上面的开播窗口。
+LIVE_STATUS_EARLY_WINDOW_BEFORE = timedelta(minutes=60)
+LIVE_STATUS_EARLY_INTERVAL = timedelta(seconds=90)
 CLOCK_SKEW_TOLERANCE = timedelta(minutes=1)
 # Cookie 失效检测只做低频校验，避免每次动态检查都多打一次 nav。
 COOKIE_CHECK_INTERVAL = timedelta(minutes=30)
@@ -595,13 +599,27 @@ class ReminderService:
             return False
         if event.id in (self.state.data.get("live_event_open_times") or {}):
             return True
-        return start_time - LIVE_STATUS_OPEN_WINDOW_BEFORE <= current <= start_time + LIVE_STATUS_OPEN_WINDOW_AFTER
+        # 两段连续区间：提前窗口 [start-60min, start-10min) + 开播窗口 [start-10min, start+2min]。
+        if start_time - LIVE_STATUS_OPEN_WINDOW_BEFORE <= current <= start_time + LIVE_STATUS_OPEN_WINDOW_AFTER:
+            return True
+        return start_time - LIVE_STATUS_EARLY_WINDOW_BEFORE <= current < start_time - LIVE_STATUS_OPEN_WINDOW_BEFORE
+
+    def event_in_live_status_early_window(self, event: LiveEvent, current: datetime) -> bool:
+        """是否只处在提前窗口（还没进入 10 分钟开播窗口）。"""
+        start_time = self.time_as_utc(event.start_time)
+        current = self.time_as_utc(current)
+        return start_time - LIVE_STATUS_EARLY_WINDOW_BEFORE <= current < start_time - LIVE_STATUS_OPEN_WINDOW_BEFORE
 
     def live_status_interval_for_member(
-        self, member: MemberConfig, candidates: list[LiveEvent]
+        self, member: MemberConfig, candidates: list[LiveEvent], current: datetime | None = None
     ) -> timedelta:
+        current = self.time_as_utc(current or now_utc())
         open_times = self.state.data.get("live_event_open_times") or {}
-        if any(event.id not in open_times for event in candidates):
+        # 未开播的候选决定了这轮要盯多紧；已开播的候选继续按「查下播」的低频巡检。
+        unopened = [event for event in candidates if event.id not in open_times]
+        if unopened:
+            if all(self.event_in_live_status_early_window(event, current) for event in unopened):
+                return LIVE_STATUS_EARLY_INTERVAL
             return timedelta(seconds=max(1, self.config.live_status_open_check_interval_seconds))
         return timedelta(minutes=max(1, self.config.live_status_close_check_interval_minutes))
 
@@ -640,7 +658,7 @@ class ReminderService:
         due: list[tuple[MemberConfig, list[LiveEvent]]] = []
         for member in members.values():
             candidates_for_member = candidates_by_member.get(member.id, [])
-            interval = self.live_status_interval_for_member(member, candidates_for_member)
+            interval = self.live_status_interval_for_member(member, candidates_for_member, current)
             last = parse_time(last_checks.get(member.id))
             if self.should_check_live_status_now(current, last, interval, force):
                 due.append((member, candidates_for_member))
@@ -858,11 +876,15 @@ class ReminderService:
             for event in candidates
             if self.member_for_event(event) and self.member_for_event(event).id == member.id
             and event.id not in ended
-            and event.start_time - timedelta(minutes=10) <= current
+            and event.start_time - LIVE_STATUS_EARLY_WINDOW_BEFORE <= current
         ]
         if not member_events:
             return None
-        member_events.sort(key=lambda event: event.start_time, reverse=True)
+        # 窗口放宽到 60 分钟后，同一天相邻两场都会落进候选；取开播时间最接近当前的一场，
+        # 平票时取更早的那场（已开始的优先于还没开始的）。
+        member_events.sort(
+            key=lambda event: (abs(self.time_as_utc(event.start_time) - current), self.time_as_utc(event.start_time))
+        )
         return member_events[0]
 
     def find_event_for_live_end(
