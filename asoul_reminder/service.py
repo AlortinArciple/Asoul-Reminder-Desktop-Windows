@@ -41,6 +41,11 @@ LIVE_STATUS_OPEN_WINDOW_AFTER = timedelta(minutes=2)
 # 这段窗口左闭右开 [start-60min, start-10min)，10 分钟整点起交给上面的开播窗口。
 LIVE_STATUS_EARLY_WINDOW_BEFORE = timedelta(minutes=60)
 LIVE_STATUS_EARLY_INTERVAL = timedelta(seconds=90)
+# 直播状态记录（开播/结束时间、场次绑定、已通知标记）的保留时长。
+# 一场直播通常 2-4 小时，7 天远大于单场时长，清理不会碰到进行中的绑定。
+LIVE_STATE_RETENTION = timedelta(days=7)
+# 清理节流：主循环每 30 秒一次，没必要每次都扫一遍状态表。
+LIVE_STATE_PRUNE_INTERVAL = timedelta(hours=1)
 CLOCK_SKEW_TOLERANCE = timedelta(minutes=1)
 # Cookie 失效检测只做低频校验，避免每次动态检查都多打一次 nav。
 COOKIE_CHECK_INTERVAL = timedelta(minutes=30)
@@ -161,6 +166,7 @@ class ReminderService:
             self.check_asoul(current=current, force=True)
         self.check_live_reminders(current)
         self.check_due_live_status(current)
+        self.prune_live_state(current)
         self.ensure_high_frequency_windows(current)
         self.check_due_dynamics()
         self.retry_pending_notifications(current)
@@ -207,6 +213,7 @@ class ReminderService:
             current = now_utc()
             self.check_asoul(current=current)
             self.check_due_live_status(current, force=True)
+            self.prune_live_state(current)
             self.ensure_high_frequency_windows(current)
             self.check_due_dynamics(force=True)
             self.retry_pending_notifications(current)
@@ -702,9 +709,22 @@ class ReminderService:
         live_statuses = self.state.data.setdefault("live_room_status", {})
         previous = live_statuses.get(member.id) or {}
         previous_status = previous.get("live_status")
-        session_key = str(previous.get("session_key") or "")
-        if status.live_status == 1 and (previous_status != 1 or not session_key):
+        previous_session = str(previous.get("session_key") or "")
+        session_key = previous_session
+        previous_live_time = str(previous.get("live_time") or "")
+        current_live_time = str(status.live_time or "")
+        if status.live_status == 1 and (
+            previous_status != 1
+            or not session_key
+            or current_live_time != previous_live_time
+        ):
             session_key = str(status.live_time or now_iso)
+        # 「场次」以 B 站返回的 live_time 为准：主播不中断直接换场时 live_time 会变，
+        # 而持续播同一场时 live_time 不变。只有新场次才允许重新绑定日程并提醒，
+        # 否则一场跨过后续日程的长直播会把下一场日程误判成开播。
+        is_new_session = status.live_status == 1 and (
+            previous_status != 1 or not previous_session or session_key != previous_session
+        )
         live_statuses[member.id] = {
             "room_id": status.room_id,
             "live_status": status.live_status,
@@ -722,7 +742,7 @@ class ReminderService:
         )
         member_open_times = self.state.data.setdefault("live_member_open_times", {})
         played_sound = False
-        if status.live_status == 1:
+        if status.live_status == 1 and is_new_session:
             opened_event = self.find_event_for_live_start(member, candidates)
             if opened_event:
                 open_times = self.state.data.setdefault("live_event_open_times", {})
@@ -755,12 +775,23 @@ class ReminderService:
                     )
                     or played_sound
                 )
+        elif status.live_status == 1:
+            # 同一场次延续（live_time 未变）：只刷新已有绑定，绝不改绑到别的日程。
+            # 这样下一场日程的检测窗口打开时，不会把这场直播记成它的开播，也不会重复提醒。
+            existing = member_open_times.get(member.id) or {}
+            if existing.get("session_key") == session_key:
+                member_open_times[member.id] = existing
         if previous_status == 1 and status.live_status != 1:
+            # 结束只记给实际开播的那一场：优先用开播时绑定的 event id，
+            # 没有绑定（例如程序重启丢了状态）才回落到 find_event_for_live_end。
             ended_event = self.find_event_for_live_end(member, candidates)
             open_info = member_open_times.pop(member.id, {}) or {}
-            event_id = ended_event.id if ended_event else str(
-                open_info.get("event_id") or f"room:{member.id}:{previous.get('session_key') or now_iso}"
-            )
+            if open_info.get("event_id"):
+                event_id = str(open_info["event_id"])
+            elif ended_event:
+                event_id = ended_event.id
+            else:
+                event_id = f"room:{member.id}:{previous.get('session_key') or now_iso}"
             self.state.data.setdefault("live_event_end_times", {})[event_id] = now_iso
             LOGGER.info("检测到直播结束：%s %s", member.name, event_id)
             self.refresh_dynamic_after_live_end(
@@ -901,6 +932,44 @@ class ReminderService:
             return None
         member_events.sort(key=lambda event: event.start_time, reverse=True)
         return member_events[0]
+
+    def prune_live_state(self, current: datetime) -> None:
+        """清理过期的直播状态：超出保留期、或对应日程已不在当前日程表中的记录。
+
+        这些状态表原来只增不减，站点每周重建日程页后旧 id 会一直留在这里，
+        既让 open_times 里的旧日程永久处于「已开播」状态，也让文件持续变大。
+        """
+        last_prune = parse_time(self.state.data.get("last_live_state_prune"))
+        if last_prune and current - self.time_as_utc(last_prune) < LIVE_STATE_PRUNE_INTERVAL:
+            return
+        self.state.data["last_live_state_prune"] = utc_now_iso()
+        known_events = {event.id for event in self.current_events()}
+        if not known_events:
+            # 日程表为空（首次启动或拉取失败）时不做 event id 过滤，
+            # 否则会把正在进行的直播绑定一并删掉。
+            self.state.save()
+            return
+        changed = False
+        for name in ("live_event_open_times", "live_event_end_times", "notified_live_started"):
+            table = self.state.data.get(name)
+            if not isinstance(table, dict):
+                continue
+            for key in list(table.keys()):
+                stamp = parse_time(table.get(key))
+                expired = stamp is None or current - self.time_as_utc(stamp) > LIVE_STATE_RETENTION
+                if expired or key not in known_events:
+                    table.pop(key, None)
+                    changed = True
+        sessions = self.state.data.get("notified_live_sessions")
+        if isinstance(sessions, dict):
+            for key in list(sessions.keys()):
+                stamp = parse_time(sessions.get(key))
+                if stamp is None or current - self.time_as_utc(stamp) > LIVE_STATE_RETENTION:
+                    sessions.pop(key, None)
+                    changed = True
+        if changed:
+            LOGGER.info("清理过期的直播状态记录")
+        self.state.save()
 
     def ensure_high_frequency_windows(self, current: datetime) -> None:
         active = self.state.data.setdefault("high_frequency_dynamic", {})

@@ -414,6 +414,158 @@ class ServiceTests(unittest.TestCase):
         self.assertIn(near.id, service.state.data["live_event_open_times"])
         self.assertNotIn(far.id, service.state.data["live_event_open_times"])
 
+    def test_continuous_live_does_not_bind_next_event(self):
+        """一场没下播的直播跨进下一场日程的检测窗口时，不得把下一场记成开播。"""
+        member = make_member("diana")
+        now = datetime.now(timezone.utc)
+        opened = make_event(member, now - timedelta(minutes=50))
+        upcoming = LiveEvent(
+            **{**make_event(member, now + timedelta(minutes=20)).__dict__, "id": "event-2"}
+        )
+        status = LiveRoomStatus(
+            member_id=member.id,
+            member_name=member.name,
+            room_id="123",
+            live_status=1,
+            title="同一场",
+            live_time="2026-06-10 11:20:00",
+        )
+        service = self.make_service(make_config(member), opened, FakeBilibili(status))
+        service.state.data["live_events"] = {
+            opened.id: event_to_state(opened),
+            upcoming.id: event_to_state(upcoming),
+        }
+
+        service.check_member_live_status(member, [opened])
+        # 下一场进入提前检测窗口后继续轮询：同一场次（live_time 未变）不应改绑。
+        service.check_member_live_status(member, [opened, upcoming])
+
+        self.assertIn(opened.id, service.state.data["live_event_open_times"])
+        self.assertNotIn(upcoming.id, service.state.data["live_event_open_times"])
+        self.assertEqual(len(service.notifier.messages), 1)
+        self.assertEqual(
+            service.state.data["live_member_open_times"][member.id]["event_id"], opened.id
+        )
+
+    def test_live_time_change_binds_new_event(self):
+        """live_time 变化说明换了新场次，应当绑定到当时窗口内的日程并再通知一次。"""
+        member = make_member("diana")
+        now = datetime.now(timezone.utc)
+        first = make_event(member, now - timedelta(minutes=50))
+        second = LiveEvent(
+            **{**make_event(member, now + timedelta(minutes=20)).__dict__, "id": "event-2"}
+        )
+        bilibili = FakeBilibili(
+            LiveRoomStatus(
+                member_id=member.id,
+                member_name=member.name,
+                room_id="123",
+                live_status=1,
+                title="第一场",
+                live_time="2026-06-10 11:20:00",
+            )
+        )
+        service = self.make_service(make_config(member), first, bilibili)
+        service.state.data["live_events"] = {
+            first.id: event_to_state(first),
+            second.id: event_to_state(second),
+        }
+
+        service.check_member_live_status(member, [first])
+        bilibili.status = LiveRoomStatus(
+            member_id=member.id,
+            member_name=member.name,
+            room_id="123",
+            live_status=1,
+            title="第二场",
+            live_time="2026-06-10 12:30:00",
+        )
+        service.check_member_live_status(member, [first, second])
+
+        self.assertIn(second.id, service.state.data["live_event_open_times"])
+        self.assertEqual(len(service.notifier.messages), 2)
+
+    def test_live_end_attributes_to_opened_event(self):
+        """下播记录只记给实际开播的那一场，不影响被跨过的后续日程。"""
+        member = make_member("diana")
+        now = datetime.now(timezone.utc)
+        opened = make_event(member, now - timedelta(minutes=50))
+        crossed = LiveEvent(
+            **{**make_event(member, now - timedelta(minutes=5)).__dict__, "id": "event-2"}
+        )
+        bilibili = FakeBilibili(
+            LiveRoomStatus(
+                member_id=member.id,
+                member_name=member.name,
+                room_id="123",
+                live_status=1,
+                title="同一场",
+                live_time="2026-06-10 11:20:00",
+            )
+        )
+        service = self.make_service(make_config(member), opened, bilibili)
+        service.state.data["live_events"] = {
+            opened.id: event_to_state(opened),
+            crossed.id: event_to_state(crossed),
+        }
+
+        service.check_member_live_status(member, [opened])
+        # 被跨过的那场进入检测窗口后继续轮询，绑定不得改写。
+        service.check_member_live_status(member, [opened, crossed])
+        bilibili.status = LiveRoomStatus(
+            member_id=member.id,
+            member_name=member.name,
+            room_id="123",
+            live_status=0,
+            title="",
+            live_time="",
+        )
+        service.check_member_live_status(member, [opened, crossed])
+
+        end_times = service.state.data["live_event_end_times"]
+        self.assertIn(opened.id, end_times)
+        self.assertNotIn(crossed.id, end_times)
+
+    def test_prune_drops_stale_live_state(self):
+        """超出保留期、或对应日程已不在当前日程表中的记录要被清掉。"""
+        member = make_member("diana")
+        start = datetime.now(timezone.utc) - timedelta(minutes=30)
+        event = make_event(member, start)
+        service = self.make_service(make_config(member), event)
+        now = datetime.now(timezone.utc)
+        stale = (now - timedelta(days=8)).isoformat()
+        service.state.data["live_event_open_times"] = {event.id: stale, "gone-event": stale}
+        service.state.data["live_event_end_times"] = {"gone-event": now.isoformat()}
+        service.state.data["notified_live_started"] = {event.id: stale, "gone-event": stale}
+        service.state.data["notified_live_sessions"] = {f"{member.id}:old": stale}
+
+        service.prune_live_state(now)
+
+        self.assertEqual(service.state.data["live_event_open_times"], {})
+        self.assertEqual(service.state.data["live_event_end_times"], {})
+        self.assertEqual(service.state.data["notified_live_started"], {})
+        self.assertEqual(service.state.data["notified_live_sessions"], {})
+
+    def test_prune_keeps_recent_live_state(self):
+        """保留期内的记录必须保留，否则会重复提醒或丢掉进行中的绑定。"""
+        member = make_member("diana")
+        start = datetime.now(timezone.utc) - timedelta(minutes=30)
+        event = make_event(member, start)
+        service = self.make_service(make_config(member), event)
+        now = datetime.now(timezone.utc)
+        recent = (now - timedelta(days=1)).isoformat()
+        service.state.data["live_event_open_times"] = {event.id: recent}
+        service.state.data["live_event_end_times"] = {event.id: recent}
+        service.state.data["notified_live_started"] = {event.id: recent}
+        service.state.data["notified_live_sessions"] = {f"{member.id}:recent": recent}
+
+        service.prune_live_state(now)
+
+        self.assertIn(event.id, service.state.data["live_event_open_times"])
+        self.assertIn(event.id, service.state.data["live_event_end_times"])
+        self.assertIn(event.id, service.state.data["notified_live_started"])
+        self.assertIn(f"{member.id}:recent", service.state.data["notified_live_sessions"])
+
     def test_records_live_event_open_time(self):
         member = make_member("diana")
         start = datetime.now(timezone.utc) - timedelta(minutes=1)
