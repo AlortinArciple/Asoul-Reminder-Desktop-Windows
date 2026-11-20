@@ -231,12 +231,20 @@ class ReminderService:
         return member.name if member else member_id
 
     def member_for_event(self, event: LiveEvent) -> MemberConfig | None:
+        """日程归属的成员：只认开启了直播监控的成员。
+
+        官方账号这类「只监测动态」的成员绝不能认领日程，否则它会让该场日程
+        既不被开播窗口检测、也不弹出开播提醒（调用方基本都是直播相关逻辑）。
+        与 :func:`asoul.member_for_event` 的语义保持一致。
+        """
         members = self.config.member_by_id
-        if event.host in members:
-            return members[event.host]
+        host = members.get(event.host)
+        if host is not None and host.monitor_live:
+            return host
         for performer in event.performers:
-            if performer in members:
-                return members[performer]
+            member = members.get(performer)
+            if member is not None and member.monitor_live:
+                return member
         return None
 
     def asoul_check_interval(self) -> timedelta:

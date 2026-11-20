@@ -26,6 +26,25 @@ DEFAULT_MEMBER_IDENTITIES: dict[str, tuple[str, str]] = {
         "https://space.bilibili.com/3537115310721781/dynamic",
     ),
 }
+# 后加的成员：老配置里根本没有这一项，光补字段不够，必须整条追加。
+# 只追加缺失的 id，已有成员一律不动，用户删掉的不会被强行加回来以外的字段覆盖。
+DEFAULT_MEMBER_ENTRIES: dict[str, dict[str, Any]] = {
+    "official": {
+        "id": "official",
+        "name": "A-SOUL_Official",
+        "enabled": True,
+        "monitor_dynamic": True,
+        "monitor_live": False,
+        "color": "#FF7F9E",
+        "uid": "703007996",
+        "dynamic_url": "https://space.bilibili.com/703007996/dynamic",
+        "live_url": "",
+        "avatar_path": "",
+        "live_sound_enabled": True,
+        "live_sound_file": "",
+        "priority": 0,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -118,12 +137,38 @@ def fill_default_identities(raw: dict[str, Any]) -> bool:
     return changed
 
 
+def ensure_default_members(raw: dict[str, Any]) -> bool:
+    """把老配置里缺少的已知成员整条追加进来，返回是否发生了改动。
+
+    与 :func:`fill_default_identities` 的区别：那个只补已有成员的空字段，
+    这个负责补「整条都不存在」的新成员。用户手动删掉的成员会被加回来一次，
+    这是有意的——成员列表由程序维护，用户关掉开关即可（enabled=false）。
+    """
+    members = raw.get("members")
+    if not isinstance(members, list):
+        return False
+    existing = {
+        canonical_member_id(str(item.get("id") or ""))
+        for item in members
+        if isinstance(item, dict)
+    }
+    changed = False
+    for member_id, entry in DEFAULT_MEMBER_ENTRIES.items():
+        if member_id in existing:
+            continue
+        members.append(dict(entry))
+        changed = True
+    return changed
+
+
 def read_config_data(path: Path | None = None) -> tuple[Path, dict[str, Any]]:
     config_path = ensure_config(path)
     raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
     if not isinstance(raw, dict):
         raise ValueError("config.json 顶层必须是对象")
-    if fill_default_identities(raw):
+    changed = fill_default_identities(raw)
+    changed = ensure_default_members(raw) or changed
+    if changed:
         try:
             write_config_data(raw, config_path)
         except (OSError, ValueError):

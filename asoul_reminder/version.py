@@ -6,7 +6,7 @@ from typing import Any
 from .paths import version_info_path
 
 
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 
 
 def app_version() -> str:

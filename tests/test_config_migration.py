@@ -5,6 +5,7 @@ from pathlib import Path
 
 from asoul_reminder.config import (
     DEFAULT_MEMBER_IDENTITIES,
+    ensure_default_members,
     fill_default_identities,
     load_config,
     read_config_data,
@@ -98,7 +99,7 @@ class FillDefaultIdentitiesTests(unittest.TestCase):
             )
             self.assertEqual(
                 {member.id for member in config.members},
-                {"diana", "eileen", "bella", "fiona", "gladys"},
+                {"diana", "eileen", "bella", "fiona", "gladys", "official"},
             )
 
     def test_load_config_does_not_flip_switches(self):
@@ -122,8 +123,51 @@ class FillDefaultIdentitiesTests(unittest.TestCase):
         _, raw = read_config_data(EXAMPLE_CONFIG)
 
         self.assertFalse(fill_default_identities(raw))
+        self.assertFalse(ensure_default_members(raw))
         for member_id in ("fiona", "gladys"):
             self.assertTrue(member_by_id(raw, member_id)["uid"])
+
+    def test_appends_missing_official_member(self):
+        raw = {"members": [{"id": "diana", "uid": "1", "dynamic_url": "u"}]}
+
+        self.assertTrue(ensure_default_members(raw))
+
+        official = member_by_id(raw, "official")
+        self.assertEqual("A-SOUL_Official", official["name"])
+        self.assertEqual("703007996", official["uid"])
+        self.assertEqual(
+            "https://space.bilibili.com/703007996/dynamic", official["dynamic_url"]
+        )
+        # 只要动态，不要直播间监控。
+        self.assertTrue(official["monitor_dynamic"])
+        self.assertFalse(official["monitor_live"])
+        self.assertEqual("", official["live_url"])
+        # 已有成员不受影响。
+        self.assertEqual("u", member_by_id(raw, "diana")["dynamic_url"])
+        self.assertEqual(2, len(raw["members"]))
+
+    def test_does_not_duplicate_or_overwrite_official(self):
+        raw = {
+            "members": [
+                {
+                    "id": "official",
+                    "name": "我自己改的名字",
+                    "enabled": False,
+                    "monitor_dynamic": False,
+                }
+            ]
+        }
+
+        self.assertFalse(ensure_default_members(raw))
+        self.assertEqual(1, len(raw["members"]))
+        member = member_by_id(raw, "official")
+        self.assertEqual("我自己改的名字", member["name"])
+        self.assertFalse(member["enabled"])
+        self.assertFalse(member["monitor_dynamic"])
+
+    def test_ensure_default_members_ignores_bad_shape(self):
+        self.assertFalse(ensure_default_members({"members": "invalid"}))
+        self.assertFalse(ensure_default_members({}))
 
 
 if __name__ == "__main__":

@@ -135,7 +135,8 @@ python run.py
 ```
 
 - 默认启用嘉然、乃琳、贝拉；心宜、思诺在模板里默认不启用，把 `enabled` 改成 `true` 即可（两人的 `uid` 与 `dynamic_url` 已经填好，打开动态监控无需再补）。
-- 旧版本生成的 `config.json` 不用手动改：读取配置时若发现已知成员的 `uid` / `dynamic_url` 为空，会自动补上并写回，且不会覆盖你自己填的值、不改动开关。
+- A-SOUL 官方账号（`official`，UID `703007996`）默认启用，只监测动态：`monitor_dynamic: true`、`monitor_live: false`、`live_url` 留空。这类成员不会认领日程，那场日程仍按正常规则检测开播。
+- 旧版本生成的 `config.json` 不用手动改：读取配置时若发现已知成员的 `uid` / `dynamic_url` 为空，会自动补上并写回，且不会覆盖你自己填的值、不改动开关；缺失的新成员（如 `official`）会整条追加。
 - `monitor_dynamic: false` 表示只监控直播，不监控动态。
 - `priority` 数字越大越优先（可为 0 或负数，允许同级）：同时开播时低优先级通知先发、高优先级后发，且只有最高优先级成员播放提示音。
 - `live_sound_enabled` 控制该成员的直播提醒是否带提示音；`live_sound_file` 留空则跟随全局设置。

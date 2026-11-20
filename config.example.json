@@ -95,6 +95,21 @@
       "live_sound_enabled": true,
       "live_sound_file": "",
       "priority": 0
+    },
+    {
+      "id": "official",
+      "name": "A-SOUL_Official",
+      "enabled": true,
+      "monitor_dynamic": true,
+      "monitor_live": false,
+      "color": "#FF7F9E",
+      "uid": "703007996",
+      "dynamic_url": "https://space.bilibili.com/703007996/dynamic",
+      "live_url": "",
+      "avatar_path": "",
+      "live_sound_enabled": true,
+      "live_sound_file": "",
+      "priority": 0
     }
   ],
   "asoul_bypass_proxy": true

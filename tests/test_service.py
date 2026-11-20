@@ -414,6 +414,23 @@ class ServiceTests(unittest.TestCase):
         self.assertIn(near.id, service.state.data["live_event_open_times"])
         self.assertNotIn(far.id, service.state.data["live_event_open_times"])
 
+    def test_dynamic_only_member_does_not_own_schedule(self):
+        """只监测动态的成员（如官方账号）不得认领日程，否则该场直播会被整体跳过。"""
+        official = make_member("official")
+        official = MemberConfig(**{
+            **official.__dict__,
+            "name": "A-SOUL_Official",
+            "monitor_dynamic": True,
+            "monitor_live": False,
+            "live_url": "",
+        })
+        start = datetime.now(timezone.utc) + timedelta(minutes=5)
+        event = make_event(official, start)
+        service = self.make_service(make_config(official), event)
+
+        self.assertIsNone(service.member_for_event(event))
+        self.assertEqual(service.events_requiring_live_status(start), [])
+
     def test_continuous_live_does_not_bind_next_event(self):
         """一场没下播的直播跨进下一场日程的检测窗口时，不得把下一场记成开播。"""
         member = make_member("diana")
