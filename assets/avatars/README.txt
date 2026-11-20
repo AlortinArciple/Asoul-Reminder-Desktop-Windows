@@ -7,5 +7,6 @@
 - bella.png
 - fiona.png
 - gladys.png
+- official.png（A-SOUL 官方账号）
 
 也可以在设置窗口的成员配置里，给每个人单独选择任意图片路径。
