@@ -207,6 +207,140 @@ class SoftCard(QtWidgets.QFrame if QtWidgets else object):
         layout.setSpacing(12)
 
 
+class SettingsSectionCard(SoftCard if QtWidgets else object):
+    """Android 风格的分区卡片：大标题 + 灰色副标题 + 分隔线夹着的行。"""
+
+    def __init__(self, title: str, detail: str = "") -> None:
+        super().__init__(surface=SUBTLE, radius=20, padding=16)
+        self.layout().setSpacing(0)
+        heading = QtWidgets.QLabel(title)
+        heading.setStyleSheet("font-size:17px; font-weight:700;")
+        self.layout().addWidget(heading)
+        if detail:
+            caption = QtWidgets.QLabel(detail)
+            caption.setProperty("muted", True)
+            caption.setWordWrap(True)
+            self.layout().addWidget(caption)
+        self.layout().addSpacing(10)
+
+    def add_row(self, widget: Any) -> None:
+        if self.layout().count():
+            self.layout().addWidget(SettingsDivider())
+        self.layout().addWidget(widget)
+
+
+class SettingsDivider(QtWidgets.QFrame if QtWidgets else object):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFixedHeight(1)
+        self.setStyleSheet(f"background: {BORDER}; border: 0;")
+
+
+class SettingsSwitchRow(QtWidgets.QWidget if QtWidgets else object):
+    """图标 + 标题/说明 + 开关，对应 Android 的 SettingSwitchRow。"""
+
+    def __init__(self, title: str, detail: str, checked: bool) -> None:
+        super().__init__()
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setSpacing(12)
+        text_box = QtWidgets.QVBoxLayout()
+        text_box.setSpacing(2)
+        name = QtWidgets.QLabel(title)
+        name.setStyleSheet("font-size:15px; font-weight:600;")
+        text_box.addWidget(name)
+        caption = QtWidgets.QLabel(detail)
+        caption.setProperty("muted", True)
+        caption.setWordWrap(True)
+        text_box.addWidget(caption)
+        layout.addLayout(text_box, 1)
+        self.checkbox = QtWidgets.QCheckBox()
+        self.checkbox.setChecked(checked)
+        layout.addWidget(self.checkbox)
+
+    def isChecked(self) -> bool:
+        return self.checkbox.isChecked()
+
+
+class SettingsSpinRow(QtWidgets.QWidget if QtWidgets else object):
+    """标题 + 说明 + 数字框（带上下箭头，范围即时夹紧）。"""
+
+    def __init__(
+        self,
+        title: str,
+        detail: str,
+        value: int,
+        *,
+        minimum: int,
+        store_key: str,
+        widgets: dict[str, Any],
+        maximum: int = 9999,
+    ) -> None:
+        super().__init__()
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setSpacing(12)
+        text_box = QtWidgets.QVBoxLayout()
+        text_box.setSpacing(2)
+        name = QtWidgets.QLabel(title)
+        name.setStyleSheet("font-size:15px; font-weight:600;")
+        text_box.addWidget(name)
+        if detail:
+            caption = QtWidgets.QLabel(detail)
+            caption.setProperty("muted", True)
+            caption.setWordWrap(True)
+            text_box.addWidget(caption)
+        layout.addLayout(text_box, 1)
+        self.spin = QtWidgets.QSpinBox()
+        self.spin.setRange(minimum, maximum)
+        self.spin.setValue(max(minimum, min(maximum, int(value))))
+        self.spin.setFixedWidth(112)
+        self.spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.spin.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.spin)
+        widgets[store_key] = self
+
+    def value(self) -> int:
+        return int(self.spin.value())
+
+
+class SettingsFieldRow(QtWidgets.QWidget if QtWidgets else object):
+    """标题 + 说明 + 输入框（文本/路径这类不适合数字框的字段）。"""
+
+    def __init__(self, title: str, editor: Any, detail: str = "") -> None:
+        super().__init__()
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setSpacing(4)
+        name = QtWidgets.QLabel(title)
+        name.setStyleSheet("font-size:15px; font-weight:600;")
+        layout.addWidget(name)
+        if detail:
+            caption = QtWidgets.QLabel(detail)
+            caption.setProperty("muted", True)
+            caption.setWordWrap(True)
+            layout.addWidget(caption)
+        layout.addWidget(editor)
+
+
+class SettingsActionRow(QtWidgets.QWidget if QtWidgets else object):
+    """标题 + 灰色状态文字 + 右侧操作按钮，对应 Android 的 ActionSettingRow。"""
+
+    def __init__(self, title: str, status_label: Any, action: Any) -> None:
+        super().__init__()
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setSpacing(12)
+        text_box = QtWidgets.QVBoxLayout()
+        text_box.setSpacing(2)
+        name = QtWidgets.QLabel(title)
+        name.setStyleSheet("font-size:15px; font-weight:600;")
+        text_box.addWidget(name)
+        text_box.addWidget(status_label)
+        layout.addLayout(text_box, 1)
+        layout.addWidget(action)
+
+
 class ScheduleItemCard(QtWidgets.QFrame if QtWidgets else object):
     def __init__(
         self,
@@ -655,6 +789,20 @@ class DashboardWindow(QtWidgets.QMainWindow if QtWidgets else object):
             border-radius: 12px;
             padding: 8px 10px;
             color: {TEXT};
+        }}
+        QSpinBox {{
+            background: {SURFACE};
+            border: 1px solid {BORDER};
+            border-radius: 12px;
+            padding: 7px 4px 7px 10px;
+            color: {TEXT};
+            font-size: 14px;
+            min-width: 84px;
+        }}
+        QSpinBox::up-button, QSpinBox::down-button {{
+            width: 16px;
+            border: 0;
+            background: transparent;
         }}
         QCheckBox {{
             color: {TEXT};
@@ -1964,6 +2112,7 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         content = QtWidgets.QWidget()
+        content.setObjectName("root")
         form = QtWidgets.QVBoxLayout(content)
         form.setContentsMargins(0, 0, 10, 0)
         form.setSpacing(14)
@@ -1975,7 +2124,12 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
         title.setStyleSheet("font-size:24px; font-weight:700;")
         form.addWidget(title)
         form.addWidget(self.dashboard._muted_label("保存后会写回 config.json，Cookie 只显示配置状态。"))
-        form.addWidget(self._global_settings_card(config))
+        form.addWidget(self._general_card(config))
+        form.addWidget(self._schedule_card(config))
+        form.addWidget(self._dynamic_card(config))
+        form.addWidget(self._live_card(config))
+        form.addWidget(self._sound_card(config))
+        form.addWidget(self._account_card(config))
 
         member_title = QtWidgets.QLabel("成员配置")
         member_title.setStyleSheet("font-size:22px; font-weight:700;")
@@ -1984,116 +2138,226 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
             form.addWidget(self._member_settings_card(member))
         form.addStretch(1)
 
-    def _global_settings_card(self, config: Any) -> Any:
-        card = SoftCard(surface=SUBTLE, radius=20, padding=16)
-        form = QtWidgets.QFormLayout()
-        form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        form.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(10)
-        card.layout().addLayout(form)
+    def _save_global_button(self, card: Any) -> None:
+        """Android 用「即改即生效」，桌面保留显式保存：这里给每个分区一张保存按钮。"""
+        button = QtWidgets.QPushButton("保存设置")
+        button.setObjectName("primaryButton")
+        button.clicked.connect(self.save_global_settings)
+        card.layout().addWidget(button)
 
-        for key, label, value in (
-            ("notifications_enabled", "通知提醒", config.notifications_enabled),
-            ("auto_start", "开机自启", config.auto_start),
-            ("write_snapshots", "写出快照", config.write_snapshots),
-            ("asoul_bypass_proxy", "日程绕过系统代理", config.asoul_bypass_proxy),
+    def _general_card(self, config: Any) -> Any:
+        card = SettingsSectionCard("通用")
+        for key, title, detail, value in (
+            (
+                "notifications_enabled",
+                "通知提醒",
+                "关闭后所有提醒都不发送，仅保留界面刷新",
+                config.notifications_enabled,
+            ),
+            (
+                "auto_start",
+                "开机自启",
+                "写入当前用户的启动项，以托盘模式静默启动",
+                config.auto_start,
+            ),
+            (
+                "write_snapshots",
+                "写出快照",
+                "在本地保留一份最新日程与动态快照，便于排查",
+                config.write_snapshots,
+            ),
+            (
+                "asoul_bypass_proxy",
+                "日程绕过系统代理",
+                "使用代理/梯子时建议开启，否则 asoul.love 可能返回 403",
+                config.asoul_bypass_proxy,
+            ),
         ):
-            checkbox = QtWidgets.QCheckBox(label)
-            checkbox.setChecked(value)
+            checkbox = SettingsSwitchRow(title, detail, value)
             self.config_widgets[key] = checkbox
-            form.addRow("", checkbox)
+            card.add_row(checkbox)
+        self._save_global_button(card)
+        return card
 
-        for key, label, value in (
-            ("asoul_calendar_url", "ASOUL 日程地址", config.asoul_calendar_url),
-            ("asoul_home_url", "ASOUL 主页地址", config.asoul_home_url),
-            (
-                "check_interval_minutes",
-                f"日程检查间隔/分钟（最低{ASOUL_MIN_CHECK_INTERVAL_MINUTES}）",
+    def _schedule_card(self, config: Any) -> Any:
+        card = SettingsSectionCard("日程", "检查 asoul.love 日程表的节拍与接口地址")
+        calendar_edit = QtWidgets.QLineEdit(config.asoul_calendar_url)
+        self.config_widgets["asoul_calendar_url"] = calendar_edit
+        card.add_row(SettingsFieldRow("日程地址", calendar_edit))
+        home_edit = QtWidgets.QLineEdit(config.asoul_home_url)
+        self.config_widgets["asoul_home_url"] = home_edit
+        card.add_row(SettingsFieldRow("主页地址", home_edit))
+        card.add_row(
+            SettingsSpinRow(
+                "检查间隔（分钟）",
+                "最短 30 分钟，实际节拍会叠加 ±10% 抖动",
                 config.check_interval_minutes,
-            ),
-            ("dynamic_check_interval_minutes", "动态检查间隔/分钟", config.dynamic_check_interval_minutes),
-            ("dynamic_high_frequency_interval_minutes", "高频动态间隔/分钟", config.dynamic_high_frequency_interval_minutes),
-            ("dynamic_high_frequency_max_minutes", "高频窗口时长/分钟", config.dynamic_high_frequency_max_minutes),
-            (
-                "live_status_open_check_interval_seconds",
-                "开播检测间隔/秒",
-                config.live_status_open_check_interval_seconds,
-            ),
-            (
-                "live_status_close_check_interval_minutes",
-                "开播后关播检查/分钟",
-                config.live_status_close_check_interval_minutes,
-            ),
-            ("dynamic_fetch_limit", "每人动态读取条数", config.dynamic_fetch_limit),
-            (
-                "suppress_live_start_dynamic_window_minutes",
-                "开播同刻动态过滤/分钟",
-                config.suppress_live_start_dynamic_window_minutes,
-            ),
-            ("request_timeout_seconds", "请求超时/秒", config.request_timeout_seconds),
-            ("live_sound_loop_seconds", "直播提示音循环/秒（0=只响一次）", config.live_sound_loop_seconds),
-            ("live_remind_before_minutes", "直播提前提醒/分钟", ", ".join(str(v) for v in config.live_remind_before_minutes)),
-        ):
-            edit = QtWidgets.QLineEdit(str(value))
-            self.config_widgets[key] = edit
-            form.addRow(label, edit)
+                minimum=ASOUL_MIN_CHECK_INTERVAL_MINUTES,
+                store_key="check_interval_minutes",
+                widgets=self.config_widgets,
+            )
+        )
+        self._save_global_button(card)
+        return card
 
+    def _dynamic_card(self, config: Any) -> Any:
+        card = SettingsSectionCard("动态", "日常检查节拍与下播后的高频补抓")
+        card.add_row(
+            SettingsSpinRow(
+                "日常间隔（分钟）",
+                "每轮读取每位成员的最新动态",
+                config.dynamic_check_interval_minutes,
+                minimum=1,
+                store_key="dynamic_check_interval_minutes",
+                widgets=self.config_widgets,
+            )
+        )
+        card.add_row(
+            SettingsSpinRow(
+                "每人读取条数",
+                "一次请求取回的动态数量上限",
+                config.dynamic_fetch_limit,
+                minimum=1,
+                store_key="dynamic_fetch_limit",
+                widgets=self.config_widgets,
+            )
+        )
+        card.add_row(
+            SettingsSpinRow(
+                "高频间隔（分钟）",
+                "下播后没抓到新动态时的补查节拍",
+                config.dynamic_high_frequency_interval_minutes,
+                minimum=1,
+                store_key="dynamic_high_frequency_interval_minutes",
+                widgets=self.config_widgets,
+            )
+        )
+        card.add_row(
+            SettingsSpinRow(
+                "高频窗口（分钟）",
+                "高频补查最长持续多久",
+                config.dynamic_high_frequency_max_minutes,
+                minimum=1,
+                store_key="dynamic_high_frequency_max_minutes",
+                widgets=self.config_widgets,
+            )
+        )
+        card.add_row(
+            SettingsSpinRow(
+                "开播同刻过滤（分钟）",
+                "开播前后这段时间内的同成员动态不再单独提醒，可填 0 关闭",
+                config.suppress_live_start_dynamic_window_minutes,
+                minimum=0,
+                store_key="suppress_live_start_dynamic_window_minutes",
+                widgets=self.config_widgets,
+            )
+        )
+        self._save_global_button(card)
+        return card
+
+    def _live_card(self, config: Any) -> Any:
+        card = SettingsSectionCard("直播", "开播与下播的检测节拍")
+        card.add_row(
+            SettingsSpinRow(
+                "开播检测间隔（秒）",
+                "进入开播窗口后每多少秒查一次直播间",
+                config.live_status_open_check_interval_seconds,
+                minimum=1,
+                store_key="live_status_open_check_interval_seconds",
+                widgets=self.config_widgets,
+            )
+        )
+        card.add_row(
+            SettingsSpinRow(
+                "下播检测间隔（分钟）",
+                "确认开播后每隔多久确认是否下播",
+                config.live_status_close_check_interval_minutes,
+                minimum=1,
+                store_key="live_status_close_check_interval_minutes",
+                widgets=self.config_widgets,
+            )
+        )
+        card.add_row(
+            SettingsSpinRow(
+                "请求超时（秒）",
+                "单次网络请求的等待上限",
+                config.request_timeout_seconds,
+                minimum=1,
+                store_key="request_timeout_seconds",
+                widgets=self.config_widgets,
+            )
+        )
+        remind_edit = QtWidgets.QLineEdit(
+            ", ".join(str(v) for v in config.live_remind_before_minutes)
+        )
+        self.config_widgets["live_remind_before_minutes"] = remind_edit
+        card.add_row(
+            SettingsFieldRow("提前提醒（分钟）", remind_edit, "逗号分隔，例如 10, 5")
+        )
+        self._save_global_button(card)
+        return card
+
+    def _sound_card(self, config: Any) -> Any:
+        card = SettingsSectionCard("提示音", "直播提醒的专属铃声与循环次数")
         sound_edit = QtWidgets.QLineEdit(config.live_sound_file)
         self.config_widgets["live_sound_file"] = sound_edit
-        form.addRow("直播提示音文件", sound_edit)
+        card.add_row(SettingsFieldRow("提示音文件", sound_edit))
 
-        sound_buttons = QtWidgets.QHBoxLayout()
-        sound_buttons.setContentsMargins(0, 0, 0, 0)
-        choose_sound = QtWidgets.QPushButton("选择")
-        choose_sound.setFixedWidth(88)
-        choose_sound.clicked.connect(self.choose_live_sound_file)
-        sound_buttons.addWidget(choose_sound)
-        preview_sound = QtWidgets.QPushButton("试听")
-        preview_sound.setFixedWidth(88)
-        preview_sound.clicked.connect(self.preview_live_sound)
-        sound_buttons.addWidget(preview_sound)
-        stop_sound = QtWidgets.QPushButton("停止")
-        stop_sound.setFixedWidth(88)
-        stop_sound.clicked.connect(self.stop_preview_sound)
-        sound_buttons.addWidget(stop_sound)
-        sound_buttons.addStretch(1)
-        form.addRow("", sound_buttons)
-        sound_hint = self.dashboard._muted_label(
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(8)
+        for text, slot in (
+            ("选择", self.choose_live_sound_file),
+            ("试听", self.preview_live_sound),
+            ("停止", self.stop_preview_sound),
+        ):
+            button = QtWidgets.QPushButton(text)
+            button.setFixedWidth(88)
+            button.clicked.connect(slot)
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        wrapper = QtWidgets.QWidget()
+        wrapper.setLayout(buttons)
+        card.add_row(wrapper)
+
+        hint = self.dashboard._muted_label(
             "留空使用内置铃声 C:\\Windows\\Media\\Ring01.wav，仅支持 .wav；正常桌面走系统通知音效，检测到全屏应用时自动改用程序铃声。"
         )
-        sound_hint.setWordWrap(True)
-        form.addRow("", sound_hint)
+        hint.setWordWrap(True)
+        card.add_row(hint)
+        card.add_row(
+            SettingsSpinRow(
+                "循环次数（秒）",
+                "0 表示只响一次",
+                config.live_sound_loop_seconds,
+                minimum=0,
+                maximum=60,
+                store_key="live_sound_loop_seconds",
+                widgets=self.config_widgets,
+            )
+        )
+        self._save_global_button(card)
+        return card
 
-        cookie_row = QtWidgets.QHBoxLayout()
-        cookie_row.setContentsMargins(0, 0, 0, 0)
-        cookie_row.setSpacing(10)
+    def _account_card(self, config: Any) -> Any:
+        card = SettingsSectionCard("账号与版本", "B 站登录状态与程序更新")
         self.cookie_status_label = self.dashboard._muted_label("")
-        cookie_row.addWidget(self.cookie_status_label)
-        login_button = QtWidgets.QPushButton("扫码登录")
-        login_button.setFixedWidth(104)
-        login_button.clicked.connect(self.dashboard.open_qr_login)
-        cookie_row.addWidget(login_button)
-        cookie_row.addStretch(1)
-        form.addRow("B 站 Cookie", cookie_row)
+        cookie_action = QtWidgets.QPushButton("扫码登录")
+        cookie_action.setFixedWidth(104)
+        cookie_action.clicked.connect(self.dashboard.open_qr_login)
+        card.add_row(
+            SettingsActionRow("B 站 Cookie", self.cookie_status_label, cookie_action)
+        )
         self._update_cookie_status_label()
 
-        update_row = QtWidgets.QHBoxLayout()
-        update_row.setContentsMargins(0, 0, 0, 0)
-        update_row.setSpacing(10)
         self.update_status_label = self.dashboard._muted_label("")
-        update_row.addWidget(self.update_status_label)
         self.check_update_button = QtWidgets.QPushButton("检查更新")
         self.check_update_button.setFixedWidth(104)
         self.check_update_button.clicked.connect(self._check_updates)
-        update_row.addWidget(self.check_update_button)
-        update_row.addStretch(1)
-        form.addRow("程序版本", update_row)
+        card.add_row(
+            SettingsActionRow("程序版本", self.update_status_label, self.check_update_button)
+        )
         self._update_update_status_label()
-        button = QtWidgets.QPushButton("保存全局配置")
-        button.setObjectName("primaryButton")
-        button.clicked.connect(self.save_global_settings)
-        form.addRow("", button)
         return card
 
     def _update_cookie_status_label(self) -> None:
@@ -2124,77 +2388,102 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
 
     def _member_settings_card(self, member: MemberConfig) -> Any:
         card = SoftCard(surface=SUBTLE, radius=20, padding=16)
-        layout = QtWidgets.QGridLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        card.layout().addLayout(layout)
-        layout.addWidget(self.dashboard._avatar(member, 34), 0, 0, 2, 1)
+        card.layout().setSpacing(0)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(12)
+        header.addWidget(self.dashboard._avatar(member, 44))
+        text_box = QtWidgets.QVBoxLayout()
+        text_box.setSpacing(2)
         optional = " · 可选" if member.id in OPTIONAL_MEMBER_IDS else ""
         title = QtWidgets.QLabel(f"{member.name}{optional}")
         title.setStyleSheet("font-size:17px; font-weight:700;")
-        layout.addWidget(title, 0, 1)
-        layout.addWidget(
-            self.dashboard._muted_label(self.dashboard._member_display_id(member.id)),
-            0,
-            2,
-            QtCore.Qt.AlignmentFlag.AlignRight,
+        text_box.addWidget(title)
+        text_box.addWidget(
+            self.dashboard._muted_label(self.dashboard._member_display_id(member.id))
         )
+        header.addLayout(text_box, 1)
+        enabled_box = QtWidgets.QVBoxLayout()
+        enabled_box.setSpacing(2)
+        enable_check = QtWidgets.QCheckBox("启用")
+        enable_check.setChecked(member.enabled)
+        self.member_widgets[(member.id, "enabled")] = enable_check
+        enabled_box.addWidget(enable_check, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+        header.addLayout(enabled_box)
+        card.layout().addLayout(header)
+        card.layout().addSpacing(10)
 
-        checks = QtWidgets.QHBoxLayout()
-        for field, text, value in (
-            ("enabled", "启用", member.enabled),
-            ("monitor_dynamic", "动态监控", member.monitor_dynamic),
-            ("monitor_live", "直播监控", member.monitor_live),
-            ("live_sound_enabled", "直播通知音效", member.live_sound_enabled),
-        ):
-            checkbox = QtWidgets.QCheckBox(text)
-            checkbox.setChecked(value)
-            self.member_widgets[(member.id, field)] = checkbox
-            checks.addWidget(checkbox)
-        checks.addStretch(1)
-        layout.addLayout(checks, 1, 1, 1, 2)
+        def add_row(widget: Any) -> None:
+            card.layout().addWidget(SettingsDivider())
+            card.layout().addWidget(widget)
 
-        for row, (field, label, value) in enumerate(
+        for field, text, detail, value in (
+            ("monitor_dynamic", "动态监控", "该成员有新动态时提醒", member.monitor_dynamic),
+            ("monitor_live", "直播监控", "参与开播/下播检测与提醒", member.monitor_live),
             (
-                ("name", "显示名称", member.name),
-                ("uid", "UID", member.uid),
-                ("dynamic_url", "动态主页", member.dynamic_url),
-                ("live_url", "直播间", member.live_url),
-                ("avatar_path", "头像", member.avatar_path),
-                ("live_sound_file", "音效文件", member.live_sound_file),
-                ("priority", "优先级", str(member.priority)),
+                "live_sound_enabled",
+                "直播通知音效",
+                "关闭后只有通知，不播放提示音",
+                member.live_sound_enabled,
             ),
-            start=2,
+        ):
+            row = SettingsSwitchRow(text, detail, value)
+            self.member_widgets[(member.id, field)] = row
+            add_row(row)
+
+        for field, label, detail, value in (
+            ("name", "显示名称", "", member.name),
+            ("uid", "UID", "B 站用户 ID，留空则动态监控不生效", member.uid),
+            ("dynamic_url", "动态主页", "", member.dynamic_url),
+            ("live_url", "直播间", "留空则不参与直播监控", member.live_url),
         ):
             edit = QtWidgets.QLineEdit(value)
             self.member_widgets[(member.id, field)] = edit
-            layout.addWidget(QtWidgets.QLabel(label), row, 0)
-            if field == "avatar_path":
-                avatar_layout = QtWidgets.QHBoxLayout()
-                avatar_layout.setContentsMargins(0, 0, 0, 0)
-                avatar_layout.addWidget(edit, 1)
-                browse = QtWidgets.QPushButton("选择")
-                browse.setFixedWidth(88)
-                browse.clicked.connect(lambda _=False, member_id=member.id: self.choose_avatar(member_id))
-                avatar_layout.addWidget(browse)
-                layout.addLayout(avatar_layout, row, 1, 1, 2)
-            elif field == "live_sound_file":
-                sound_layout = QtWidgets.QHBoxLayout()
-                sound_layout.setContentsMargins(0, 0, 0, 0)
-                sound_layout.addWidget(edit, 1)
-                browse_sound = QtWidgets.QPushButton("选择")
-                browse_sound.setFixedWidth(88)
-                browse_sound.clicked.connect(
-                    lambda _=False, member_id=member.id: self.choose_member_sound_file(member_id)
-                )
-                sound_layout.addWidget(browse_sound)
-                layout.addLayout(sound_layout, row, 1, 1, 2)
-            else:
-                layout.addWidget(edit, row, 1, 1, 2)
+            add_row(SettingsFieldRow(label, edit, detail))
 
-        button = QtWidgets.QPushButton("保存成员配置")
+        for field, label, detail, slot in (
+            ("avatar_path", "头像", "选择本地图片作为成员头像", self.choose_avatar),
+            (
+                "live_sound_file",
+                "音效文件",
+                "留空跟随全局设置",
+                self.choose_member_sound_file,
+            ),
+        ):
+            edit = QtWidgets.QLineEdit(getattr(member, field))
+            self.member_widgets[(member.id, field)] = edit
+            picker = QtWidgets.QHBoxLayout()
+            picker.setContentsMargins(0, 0, 0, 0)
+            picker.setSpacing(8)
+            picker.addWidget(edit, 1)
+            browse = QtWidgets.QPushButton("选择")
+            browse.setFixedWidth(88)
+            browse.clicked.connect(lambda _=False, m=member.id, s=slot: s(m))
+            picker.addWidget(browse)
+            wrapper = QtWidgets.QWidget()
+            wrapper.setLayout(picker)
+            add_row(SettingsFieldRow(label, wrapper, detail))
+
+        priority_row = SettingsSpinRow(
+            "优先级",
+            "数字越大越优先；同时开播时按此决定通知顺序与提示音",
+            member.priority,
+            minimum=-99,
+            maximum=99,
+            store_key="priority",
+            widgets=self.member_widgets,
+        )
+        # 每个成员的键要带成员 id，避免互相覆盖。
+        self.member_widgets.pop("priority", None)
+        self.member_widgets[(member.id, "priority")] = priority_row
+        add_row(priority_row)
+
+        button = QtWidgets.QPushButton("保存该成员")
+        button.setObjectName("primaryButton")
         button.clicked.connect(lambda _=False, member_id=member.id: self.save_member_settings(member_id))
-        layout.addWidget(button, 9, 1, 1, 2)
-        layout.setColumnStretch(1, 1)
+        card.layout().addSpacing(12)
+        card.layout().addWidget(button)
         return card
 
     def choose_member_sound_file(self, member_id: str) -> None:
@@ -2242,9 +2531,14 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
         stop_live_sound()
 
     def _live_sound_loop_value(self) -> int:
+        widget = self.config_widgets.get("live_sound_loop_seconds")
+        if widget is None:
+            return 0
+        if hasattr(widget, "value"):
+            return max(0, min(60, int(widget.value())))
         try:
-            return max(0, min(60, int(self.config_widgets["live_sound_loop_seconds"].text().strip())))
-        except (KeyError, TypeError, ValueError):
+            return max(0, min(60, int(widget.text().strip())))
+        except (TypeError, ValueError):
             return 0
 
     def save_global_settings(self) -> None:
@@ -2272,7 +2566,12 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
                     raise ValueError(f"{key} 不能为空")
                 updates[key] = value
             for key in int_keys:
-                value = int(self.config_widgets[key].text().strip())
+                widget = self.config_widgets[key]
+                # 数字框（SettingsSpinRow）直接取值；兼容仍然存在的纯文本控件。
+                if hasattr(widget, "value"):
+                    value = int(widget.value())
+                else:
+                    value = int(widget.text().strip())
                 allow_zero = {
                     "suppress_live_start_dynamic_window_minutes",
                     "live_sound_loop_seconds",
@@ -2327,6 +2626,17 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
         self.dashboard.refresh(force=True)
         QtWidgets.QMessageBox.information(self, "已保存", "全局配置已保存。")
 
+    def _member_priority_value(self, member_id: str) -> int:
+        widget = self.member_widgets.get((member_id, "priority"))
+        if widget is None:
+            return 0
+        if hasattr(widget, "value"):
+            return int(widget.value())
+        try:
+            return int(widget.text().strip() or "0")
+        except (TypeError, ValueError):
+            return 0
+
     def save_member_settings(self, member_id: str) -> None:
         try:
             name = self.member_widgets[(member_id, "name")].text().strip()
@@ -2343,7 +2653,7 @@ class SettingsDialog(QtWidgets.QDialog if QtWidgets else object):
                 "avatar_path": self.member_widgets[(member_id, "avatar_path")].text().strip(),
                 "live_sound_enabled": self.member_widgets[(member_id, "live_sound_enabled")].isChecked(),
                 "live_sound_file": self.member_widgets[(member_id, "live_sound_file")].text().strip(),
-                "priority": int(self.member_widgets[(member_id, "priority")].text().strip() or "0"),
+                "priority": self._member_priority_value(member_id),
             }
             update_member_config(member_id, values)
         except Exception as exc:
