@@ -7,7 +7,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from .paths import app_data_dir, resolve_app_path, tray_icon_path
+from .paths import app_data_dir, notify_icon_path, resolve_app_path
 
 LOGGER = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ def play_live_sound(sound_file: str = "", loop_seconds: int = 0) -> bool:
 
 
 def ensure_icon() -> Path:
-    configured = tray_icon_path()
+    configured = notify_icon_path()
     if configured.exists():
         return configured
     fallback = app_data_dir() / "asoul.ico"

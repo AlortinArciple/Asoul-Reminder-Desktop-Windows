@@ -41,5 +41,8 @@ if (Test-Path $PrivateConfig) {
 
 New-Item -ItemType Directory -Path ".\dist\AsoulReminder\assets\avatars" -Force | Out-Null
 Copy-Item -Path ".\assets\avatars\*" -Destination ".\dist\AsoulReminder\assets\avatars" -Force
+# 图标也放一份到外层 assets：_asset_path 会先读 _internal 里的内嵌副本，
+# 外层这份让用户能直接替换图标，不必重新打包。
+Copy-Item -Path ".\assets\*.ico" -Destination ".\dist\AsoulReminder\assets" -Force
 
 .\scripts\package-portable.ps1

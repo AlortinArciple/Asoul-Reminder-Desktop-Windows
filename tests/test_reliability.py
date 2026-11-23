@@ -9,12 +9,36 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from asoul_reminder.config import load_config, update_config_values
-from asoul_reminder.notifications import Notifier, play_live_sound
+from asoul_reminder.notifications import Notifier, ensure_icon, play_live_sound
+from asoul_reminder.paths import notify_icon_path, tray_icon_path
 from asoul_reminder.single_instance import SingleInstance
 from asoul_reminder.state import StateStore
 
 
 class ReliabilityTests(unittest.TestCase):
+    def test_notify_icon_is_separate_from_tray_icon(self):
+        """托盘图标是五字母横排标志，缩到 toast 里会糊；通知要单独用留白更少的版本。"""
+        notify = notify_icon_path()
+        tray = tray_icon_path()
+
+        self.assertTrue(notify.exists(), f"通知图标缺失：{notify}")
+        self.assertNotEqual(notify, tray)
+        # 通知图标必须带多档尺寸，否则 Windows 会拿单帧去缩放，小尺寸更容易糊。
+        data = notify.read_bytes()
+        self.assertEqual(int.from_bytes(data[2:4], "little"), 1)  # type=icon
+        frames = int.from_bytes(data[4:6], "little")
+        self.assertGreaterEqual(frames, 6)
+        widths = []
+        for index in range(frames):
+            width = data[6 + index * 16] or 256
+            widths.append(width)
+        self.assertIn(256, widths)
+        self.assertIn(32, widths)
+        self.assertIn(16, widths)
+
+    def test_ensure_icon_returns_notify_icon(self):
+        self.assertEqual(ensure_icon(), notify_icon_path())
+
     def test_state_snapshot_only_exposes_fully_saved_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = StateStore(Path(tmp) / "state.json")

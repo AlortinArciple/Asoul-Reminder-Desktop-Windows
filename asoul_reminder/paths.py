@@ -84,6 +84,16 @@ def tray_icon_path() -> Path:
     return _asset_path("asoul_tray_icon.ico")
 
 
+def notify_icon_path() -> Path:
+    """通知专用图标：托盘图标是五字母横排标志，缩到 toast 里约 44px 会糊成一团。
+
+    这里用留白更少的官方头像版本，小尺寸下笔画才认得出来。
+    文件缺失时回落到托盘图标，保证通知仍带图标。
+    """
+    path = _asset_path("asoul_notify_icon.ico")
+    return path if path.exists() else tray_icon_path()
+
+
 def app_icon_path() -> Path:
     return tray_icon_path()
 
